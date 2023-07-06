@@ -16,6 +16,8 @@ class TestCase extends \PHPUnit\Framework\TestCase
         parent::setUp();
 
         $this->mockApplication();
+
+        $this->setupTestDbData();
     }
 
     /**
@@ -24,6 +26,8 @@ class TestCase extends \PHPUnit\Framework\TestCase
     protected function tearDown(): void
     {
         $this->destroyApplication();
+
+        parent::tearDown();
     }
 
     /**
@@ -57,5 +61,64 @@ class TestCase extends \PHPUnit\Framework\TestCase
     protected function destroyApplication()
     {
         Yii::setApplication(null);
+    }
+
+    /**
+     * Setup tables for test ActiveRecord
+     */
+    protected function setupTestDbData()
+    {
+        $db = Yii::app()->getDb();
+
+        // Structure :
+
+        $db->createCommand()
+            ->createTable('category', [
+                'id' => 'pk',
+                'name' => 'string',
+                'is_deleted' => 'boolean',
+            ]);
+
+        $db->createCommand()
+            ->createTable('item', [
+                'id' => 'pk',
+                'category_id' => 'integer',
+                'name' => 'string',
+                'is_deleted' => 'boolean DEFAULT 0',
+                'deleted_at' => 'integer',
+            ]);
+
+        // Data :
+
+        $builder = $db->getCommandBuilder();
+
+        $table = 'category';
+        $categoryIds = [];
+
+        $builder->createInsertCommand($table, ['name' => 'category1', 'is_deleted' => false])->execute();
+        $categoryIds[] = $builder->getLastInsertID($table);
+        $builder->createInsertCommand($table, ['name' => 'category2', 'is_deleted' => false])->execute();
+        $categoryIds[] = $builder->getLastInsertID($table);
+        $builder->createInsertCommand($table, ['name' => 'category3', 'is_deleted' => false])->execute();
+        $categoryIds[] = $builder->getLastInsertID($table);
+
+        $builder->createMultipleInsertCommand('item', [
+            [
+                'name' => 'item1',
+                'category_id' => $categoryIds[0],
+            ],
+            [
+                'name' => 'item2',
+                'category_id' => $categoryIds[1],
+            ],
+            [
+                'name' => 'item3',
+                'category_id' => $categoryIds[0],
+            ],
+            [
+                'name' => 'item4',
+                'category_id' => $categoryIds[1],
+            ],
+        ])->execute();
     }
 }
