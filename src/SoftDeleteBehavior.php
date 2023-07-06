@@ -3,6 +3,7 @@
 namespace yii1tech\ar\softdelete;
 
 use CBehavior;
+use CDbCriteria;
 use CDbException;
 use CDbExpression;
 use CModelEvent;
@@ -421,6 +422,84 @@ class SoftDeleteBehavior extends CBehavior
 
             throw $exception;
         }
+    }
+
+    // Query:
+
+    public function createDeletedFindCondition()
+    {
+        foreach ($this->softDeleteAttributeValues as $attribute => $value) {
+            if (!is_scalar($value) && is_callable($value)) {
+                $value = call_user_func($value, $this->owner);
+            }
+            $attributes[$attribute] = $value;
+        }
+
+        $criteria = new CDbCriteria();
+        $criteria->addColumnCondition($attributes);
+
+        return $criteria;
+    }
+
+    public function createNotDeletedFindCondition()
+    {
+        foreach ($this->detectRestoreAttributeValues() as $attribute => $value) {
+            if (!is_scalar($value) && is_callable($value)) {
+                $value = call_user_func($value, $this->owner);
+            }
+            $attributes[$attribute] = $value;
+        }
+
+        $criteria = new CDbCriteria();
+        $criteria->addColumnCondition($attributes);
+
+        return $criteria;
+    }
+
+    /**
+     * Filters query to return only 'soft-deleted' records.
+     *
+     * @return \CActiveRecord|static query instance.
+     */
+    public function deleted()
+    {
+        $this->owner->getDbCriteria()->mergeWith($this->createDeletedFindCondition());
+
+        return $this->owner;
+    }
+
+    /**
+     * Filters query to return only not 'soft-deleted' records.
+     *
+     * @return \CActiveRecord|static query instance.
+     */
+    public function notDeleted()
+    {
+        $this->owner->getDbCriteria()->mergeWith($this->createNotDeletedFindCondition());
+
+        return $this->owner;
+    }
+
+    /**
+     * Applies `deleted()` or `notDeleted()` to the query regarding passed filter value.
+     * If an empty value is passed - only not deleted records will be queried.
+     * If value matching not empty int passed - only deleted records will be queried.
+     * If not empty value matching int zero passed (e.g. `0`, `'0'`, `'all'`, `false`) - all records will be queried.
+     *
+     * @param mixed $deleted filter value.
+     * @return \CActiveRecord|static
+     */
+    public function filterDeleted($deleted)
+    {
+        if ($deleted === '' || $deleted === null || $deleted === []) {
+            return $this->notDeleted();
+        }
+
+        if ((int) $deleted) {
+            return $this->deleted();
+        }
+
+        return $this->owner;
     }
 
     // Event Handlers:
