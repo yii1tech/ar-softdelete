@@ -88,6 +88,11 @@ class SoftDeleteBehavior extends CBehavior
      */
     public $restoreAttributeValues;
     /**
+     * @var bool whether to invoke owner {@see \CActiveRecord::beforeDelete()} and {@see \CActiveRecord::afterDelete()}
+     * while performing soft delete. This option affects only {@see softDelete()} method.
+     */
+    public $invokeDeleteEvents = true;
+    /**
      * @var callable|null callback, which execution determines if record should be "hard" deleted instead of being marked
      * as deleted. Callback should match following signature: `bool function(\CActiveRecord $model)`
      * For example:
@@ -180,7 +185,17 @@ class SoftDeleteBehavior extends CBehavior
             return $this->owner->delete();
         }
 
-        return $this->softDeleteInternal();
+        if ($this->invokeDeleteEvents && !$this->owner->evaluateExpression('$this->beforeDelete()')) {
+            return false;
+        }
+
+        $result = $this->softDeleteInternal();
+
+        if ($this->invokeDeleteEvents) {
+            $this->owner->evaluateExpression('$this->afterDelete()');
+        }
+
+        return $result;
     }
 
     /**
