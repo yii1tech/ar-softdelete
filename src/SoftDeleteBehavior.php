@@ -49,6 +49,9 @@ use LogicException;
  * @property bool $replaceRegularDelete whether to perform soft delete instead of regular delete.
  * If enabled {@see \CActiveRecord::delete()} will perform soft deletion instead of actual record deleting.
  * @property bool $useRestoreAttributeValuesAsDefaults whether to use {@see restoreAttributeValues} as defaults on record insertion.
+ * @property array $deletedCondition filter condition for 'soft-deleted' records.
+ * @property array $notDeletedCondition filter condition for not 'soft-deleted' records.
+ * @property bool $autoApplyNotDeletedCondition whether to automatically apply {@see notDeletedCondition} before find.
  *
  * @author Paul Klimov <klimov.paul@gmail.com>
  * @since 1.0
@@ -118,6 +121,22 @@ class SoftDeleteBehavior extends CBehavior
      * @var bool whether to use {@see restoreAttributeValues} as defaults on record insertion.
      */
     private $_useRestoreAttributeValuesAsDefaults = false;
+    /**
+     * @var array filter condition for 'soft-deleted' records.
+     */
+    private $_deletedCondition;
+    /**
+     * @var array filter condition for not 'soft-deleted' records.
+     */
+    private $_notDeletedCondition;
+    /**
+     * @var bool whether to automatically apply {@see notDeletedCondition} before find.
+     */
+    private $_autoApplyNotDeletedCondition = false;
+    /**
+     * @var bool indicates whether "soft-delete" related condition has been already applied or not.
+     */
+    private $isSoftDeleteConditionApplied = false;
 
     /**
      * @return bool whether to perform soft delete instead of regular delete.
@@ -174,6 +193,84 @@ class SoftDeleteBehavior extends CBehavior
 
         return $this->owner;
     }
+
+    /**
+     * @return array filter condition for 'soft-deleted' records.
+     */
+    public function getDeletedCondition()
+    {
+        if ($this->_deletedCondition === null) {
+            $this->_deletedCondition = $this->defaultDeletedCondition();
+        }
+
+        return $this->_deletedCondition;
+    }
+
+    /**
+     * @param array $deletedCondition filter condition for 'soft-deleted' records.
+     * @return \CActiveRecord|null owner record.
+     */
+    public function setDeletedCondition($deletedCondition)
+    {
+        $this->_deletedCondition = $deletedCondition;
+
+        return $this->owner;
+    }
+
+    /**
+     * @return array filter condition for not 'soft-deleted' records.
+     */
+    public function getNotDeletedCondition()
+    {
+        if ($this->_notDeletedCondition === null) {
+            $this->_notDeletedCondition = $this->defaultNotDeletedCondition();
+        }
+
+        return $this->_notDeletedCondition;
+    }
+
+    /**
+     * @param array $notDeletedCondition filter condition for not 'soft-deleted' records.
+     * @return \CActiveRecord|null owner record.
+     */
+    public function setNotDeletedCondition($notDeletedCondition)
+    {
+        $this->_notDeletedCondition = $notDeletedCondition;
+
+        return $this->owner;
+    }
+
+    /**
+     * @return bool whether to automatically apply {@see notDeletedCondition} before find.
+     */
+    public function getAutoApplyNotDeletedCondition(): bool
+    {
+        return $this->_autoApplyNotDeletedCondition;
+    }
+
+    /**
+     * @param bool $autoApplyNotDeletedCondition whether to automatically apply {@see notDeletedCondition} before find.
+     * @return \CActiveRecord|null owner record.
+     */
+    public function setAutoApplyNotDeletedCondition(bool $autoApplyNotDeletedCondition)
+    {
+        $isEnabled = is_object($this->owner) && $this->getEnabled();
+        if ($isEnabled) {
+            $this->setEnabled(false);
+        }
+
+        $this->_autoApplyNotDeletedCondition = $autoApplyNotDeletedCondition;
+
+        $this->isSoftDeleteConditionApplied = false;
+
+        if ($isEnabled) {
+            $this->setEnabled(true);
+        }
+
+        return $this->owner;
+    }
+
+    // Soft Delete :
 
     /**
      * Marks the owner as deleted.
@@ -426,24 +523,14 @@ class SoftDeleteBehavior extends CBehavior
 
     // Query:
 
-    public function createDeletedFindCondition()
+    /**
+     * Creates search criteria for fetching "soft-deleted" records.
+     *
+     * @return \CDbCriteria search criteria instance.
+     */
+    protected function createDeletedFindCriteria()
     {
-        foreach ($this->softDeleteAttributeValues as $attribute => $value) {
-            if (!is_scalar($value) && is_callable($value)) {
-                $value = call_user_func($value, $this->owner);
-            }
-            $attributes[$attribute] = $value;
-        }
-
-        $criteria = new CDbCriteria();
-        $criteria->addColumnCondition($attributes);
-
-        return $criteria;
-    }
-
-    public function createNotDeletedFindCondition()
-    {
-        foreach ($this->detectRestoreAttributeValues() as $attribute => $value) {
+        foreach ($this->getDeletedCondition() as $attribute => $value) {
             if (!is_scalar($value) && is_callable($value)) {
                 $value = call_user_func($value, $this->owner);
             }
@@ -457,13 +544,84 @@ class SoftDeleteBehavior extends CBehavior
     }
 
     /**
+     * Creates search criteria for fetching NOT "soft-deleted" records.
+     *
+     * @return \CDbCriteria search criteria instance.
+     */
+    protected function createNotDeletedFindCriteria()
+    {
+        foreach ($this->getNotDeletedCondition() as $attribute => $value) {
+            if (!is_scalar($value) && is_callable($value)) {
+                $value = call_user_func($value, $this->owner);
+            }
+            $attributes[$attribute] = $value;
+        }
+
+        $criteria = new CDbCriteria();
+        $criteria->addColumnCondition($attributes);
+
+        return $criteria;
+    }
+
+    /**
+     * Generates default filter condition for 'deleted' records.
+     * @see deletedCondition
+     *
+     * @return array filter condition.
+     */
+    protected function defaultDeletedCondition()
+    {
+        $condition = [];
+        foreach ($this->softDeleteAttributeValues as $attribute => $value) {
+            if (!is_scalar($value) && is_callable($value)) {
+                $value = call_user_func($value, $this);
+            }
+            $condition[$attribute] = $value;
+        }
+
+        return $condition;
+    }
+
+    /**
+     * Generates default filter condition for not 'deleted' records.
+     * @see notDeletedCondition
+     *
+     * @return array filter condition.
+     * @throws \LogicException on invalid configuration.
+     */
+    protected function defaultNotDeletedCondition()
+    {
+        $condition = [];
+
+        foreach ($this->detectRestoreAttributeValues() as $attribute => $value) {
+            if (is_bool($value)) {
+                $restoreValue = $value;
+            } elseif (is_int($value)) {
+                $restoreValue = $value;
+            } elseif (!is_scalar($value) && is_callable($value)) {
+                $restoreValue = call_user_func($value, $this);
+            } elseif ($value instanceof CDbExpression) {
+                $restoreValue = $value;
+            } else {
+                throw new LogicException('Unable to automatically determine not delete condition, "' . get_class($this) . '::$notDeletedCondition" should be explicitly set.');
+            }
+
+            $condition[$attribute] = $restoreValue;
+        }
+
+        return $condition;
+    }
+
+    /**
      * Filters query to return only 'soft-deleted' records.
      *
      * @return \CActiveRecord|static query instance.
      */
     public function deleted()
     {
-        $this->owner->getDbCriteria()->mergeWith($this->createDeletedFindCondition());
+        $this->owner->getDbCriteria()->mergeWith($this->createDeletedFindCriteria());
+
+        $this->isSoftDeleteConditionApplied = true;
 
         return $this->owner;
     }
@@ -475,7 +633,9 @@ class SoftDeleteBehavior extends CBehavior
      */
     public function notDeleted()
     {
-        $this->owner->getDbCriteria()->mergeWith($this->createNotDeletedFindCondition());
+        $this->owner->getDbCriteria()->mergeWith($this->createNotDeletedFindCriteria());
+
+        $this->isSoftDeleteConditionApplied = true;
 
         return $this->owner;
     }
@@ -499,6 +659,8 @@ class SoftDeleteBehavior extends CBehavior
             return $this->deleted();
         }
 
+        $this->isSoftDeleteConditionApplied = true;
+
         return $this->owner;
     }
 
@@ -509,9 +671,7 @@ class SoftDeleteBehavior extends CBehavior
      */
     public function events(): array
     {
-        $events = [
-            'onBeforeFind' => 'beforeFind',
-        ];
+        $events = [];
 
         if ($this->getReplaceRegularDelete()) {
             $events['onBeforeDelete'] = 'beforeDelete';
@@ -519,6 +679,10 @@ class SoftDeleteBehavior extends CBehavior
 
         if ($this->getUseRestoreAttributeValuesAsDefaults()) {
             $events['onBeforeSave'] = 'beforeSave';
+        }
+
+        if ($this->getAutoApplyNotDeletedCondition()) {
+            $events['onBeforeFind'] = 'beforeFind';
         }
 
         return $events;
@@ -568,6 +732,10 @@ class SoftDeleteBehavior extends CBehavior
      */
     public function beforeFind(CModelEvent $event): void
     {
-        ;
+        if (!$this->isSoftDeleteConditionApplied) {
+            $this->notDeleted();
+        }
+
+        $this->isSoftDeleteConditionApplied = false;
     }
 }
